@@ -377,19 +377,63 @@ class NoteApp:
             start = end_index
 
     def show_about_dialog(self) -> None:
-        app_name = "Note"
-        info = (
-            f"{app_name}\n"
-            "A simple Tkinter note taking app.\n\n"
-            "Shortcuts:\n"
-            " - Ctrl+N: New\n"
-            " - Ctrl+O: Open\n"
-            " - Ctrl+S: Save\n"
-            " - Ctrl+Shift+S: Save As\n"
-            " - Ctrl+F: Find\n"
-            " - Ctrl+Q: Exit"
+        if hasattr(self, "about_window") and self.about_window.winfo_exists():
+            self.about_window.lift()
+            return
+
+        self.about_window = tk.Toplevel(self.root)
+        self.about_window.title("About — Note")
+        self.about_window.transient(self.root)
+        self.about_window.resizable(False, False)
+        try:
+            self.about_window.grab_set()
+        except Exception:
+            pass
+
+        container = ttk.Frame(self.about_window, padding=16)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        title_font = tkfont.Font(family=self.ui_font.actual("family"), size=16, weight="bold")
+        subtitle_font = tkfont.Font(family=self.ui_font.actual("family"), size=11)
+
+        ttk.Label(container, text="Note", font=title_font).pack(anchor=tk.W)
+        ttk.Label(
+            container,
+            text="A clean, modern note‑taking app built with Python and Tkinter",
+            font=subtitle_font,
+        ).pack(anchor=tk.W, pady=(2, 10))
+
+        ttk.Separator(container).pack(fill=tk.X, pady=(0, 12))
+
+        about_text = (
+            "What it is\n"
+            "Note is a lightweight, distraction‑free text editor for quick notes and writing. "
+            "It focuses on clarity and comfort: word wrap, line numbers, refined light/dark themes, and a clear status bar.\n\n"
+            "How it’s built\n"
+            "- Python’s Tkinter for the GUI, with ttk widgets for a native look\n"
+            "- A custom theme system (light/dark) applied to widgets\n"
+            "- A canvas‑based line‑number gutter synchronized with the Text widget\n"
+            "- Find with in‑document highlighting via Text tags\n"
+            "- A segmented status bar with cursor position, selection size, and counts\n\n"
+            "Key features\n"
+            "- New/Open/Save/Save As with unsaved‑changes prompts\n"
+            "- Undo/Redo, Cut/Copy/Paste, Select All\n"
+            "- Find, Highlight All, Clear highlights\n"
+            "- Toggle theme (Ctrl+T), Word Wrap, Line Numbers\n"
+            "- Zoom text (Ctrl+= / Ctrl+-)\n"
         )
-        messagebox.showinfo("About", info, parent=self.root)
+
+        # Use Message widget for nice wrapped paragraphs
+        msg = tk.Message(container, text=about_text, width=560, anchor=tk.W, justify=tk.LEFT)
+        msg.pack(fill=tk.X)
+
+        ttk.Separator(container).pack(fill=tk.X, pady=(12, 10))
+
+        btn_row = ttk.Frame(container)
+        btn_row.pack(fill=tk.X)
+        ttk.Button(btn_row, text="Close", command=self.about_window.destroy).pack(side=tk.RIGHT)
+
+        self.about_window.bind("<Escape>", lambda e: self.about_window.destroy())
 
     # ---- Theming & UI helpers ----
     def _init_style(self) -> None:
