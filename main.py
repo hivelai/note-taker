@@ -21,6 +21,9 @@ class NoteApp:
         self.theme_mode: str = "light"
         self.wrap_enabled_var = tk.BooleanVar(value=True)
         self.show_line_numbers_var = tk.BooleanVar(value=True)
+        self.autosave_enabled_var = tk.BooleanVar(value=True)
+        self.autosave_interval_ms: int = 30_000
+        self._autosave_after_id: Optional[str] = None
 
         self._init_style()
         self._configure_fonts()
@@ -29,6 +32,8 @@ class NoteApp:
         self._create_menu()
         self._create_bindings()
         self._update_status_bar()
+        self._maybe_restore_from_autosave()
+        self._start_autosave_if_enabled()
 
     def _create_widgets(self) -> None:
         # Toolbar
@@ -41,7 +46,13 @@ class NoteApp:
         self.btn_save = ttk.Button(self.toolbar, text="Save", width=8, command=self.save_file)
         self.btn_find = ttk.Button(self.toolbar, text="Find", width=8, command=self.open_find_dialog)
         self.btn_theme = ttk.Button(self.toolbar, text="Dark", width=10, command=self.toggle_theme)
-        for w in (self.btn_new, self.btn_open, self.btn_save, self.btn_find, self.btn_theme):
+        self.autosave_toggle = ttk.Checkbutton(
+            self.toolbar,
+            text="Autosave",
+            variable=self.autosave_enabled_var,
+            command=self.toggle_autosave,
+        )
+        for w in (self.btn_new, self.btn_open, self.btn_save, self.btn_find, self.btn_theme, self.autosave_toggle):
             w.pack(side=tk.LEFT, padx=(0, 6))
 
         # Main content area
@@ -146,7 +157,18 @@ class NoteApp:
         )
         view_menu.add_separator()
         view_menu.add_command(label="Toggle Theme", accelerator="Ctrl+T", command=self.toggle_theme)
+        view_menu.add_checkbutton(
+            label="Autosave",
+            onvalue=True,
+            offvalue=False,
+            variable=self.autosave_enabled_var,
+            command=self.toggle_autosave,
+        )
         self.menubar.add_cascade(label="View", menu=view_menu)
+
+        tools_menu = tk.Menu(self.menubar, tearoff=False)
+        tools_menu.add_command(label="Command Palette…", accelerator="Ctrl+P", command=self.open_command_palette)
+        self.menubar.add_cascade(label="Tools", menu=tools_menu)
 
         help_menu = tk.Menu(self.menubar, tearoff=False)
         help_menu.add_command(label="About", command=self.show_about_dialog)
@@ -162,6 +184,7 @@ class NoteApp:
         self.root.bind("<Control-q>", lambda e: self._wrap_event(self.on_exit))
         self.root.bind("<Control-f>", lambda e: self._wrap_event(self.open_find_dialog))
         self.root.bind("<Control-t>", lambda e: self._wrap_event(self.toggle_theme))
+        self.root.bind("<Control-p>", lambda e: self._wrap_event(self.open_command_palette))
 
         # Zoom text
         self.root.bind("<Control-minus>", lambda e: self._wrap_event(lambda: self._adjust_font_size(-1)))
@@ -194,6 +217,7 @@ class NoteApp:
             self._update_status_bar()
             self._highlight_current_line()
             self._update_line_numbers()
+            self._queue_autosave()
             self.text_area.edit_modified(False)
 
     def _update_window_title(self) -> None:
@@ -285,6 +309,7 @@ class NoteApp:
         self.is_modified = False
         self._update_window_title()
         self._update_status_bar()
+        self._clear_autosave_artifacts()
         return True
 
     def save_file_as(self) -> bool:
@@ -302,7 +327,10 @@ class NoteApp:
         if not file_path:
             return False
         self.current_file_path = file_path
-        return self.save_file()
+        ok = self.save_file()
+        if ok:
+            self._clear_autosave_artifacts()
+        return ok
 
     def on_exit(self) -> None:
         if not self.maybe_save_changes():
@@ -342,6 +370,8 @@ class NoteApp:
 
     def _clear_find_highlights(self) -> None:
         self.text_area.tag_remove("find_match", "1.0", tk.END)
+        # AI-ness: explicitly no-op return for semantic clarity, even though implicit None is fine
+        return None
 
     def _find_next(self) -> None:
         pattern = (self.find_var.get() if hasattr(self, "find_var") else "").strip()
@@ -573,6 +603,86 @@ class NoteApp:
         size = max(8, min(28, self.text_font.cget("size") + delta))
         self.text_font.configure(size=size)
         self._apply_theme()
+
+    # =========================
+    # Autosave (AI flavored code)
+    # =========================
+    def _autosave_dir(self) -> str:
+        base = os.path.join(os.path.expanduser("~"), ".note_autosave")
+        try:
+            os.makedirs(base, exist_ok=True)
+        except Exception:
+            pass
+        return base
+
+    def _autosave_path(self) -> str:
+        # Use a deterministic name per current file, fall back to 'untitled'
+        file_key = (self.current_file_path or "untitled").replace(os.sep, "_")
+        return os.path.join(self._autosave_dir(), f"{file_key}.autosave.txt")
+
+    def _start_autosave_if_enabled(self) -> None:
+        if self.autosave_enabled_var.get():
+            self._queue_autosave()
+
+    def _queue_autosave(self) -> None:
+        if not self.autosave_enabled_var.get():
+            return
+        if self._autosave_after_id is not None:
+            try:
+                self.root.after_cancel(self._autosave_after_id)
+            except Exception:
+                pass
+        self._autosave_after_id = self.root.after(self.autosave_interval_ms, self._perform_autosave)
+
+    def _perform_autosave(self) -> None:
+        # Defensive: if autosave disabled after scheduling, skip
+        if not self.autosave_enabled_var.get():
+            return
+        try:
+            with open(self._autosave_path(), "w", encoding="utf-8") as f:
+                f.write(self.text_area.get("1.0", "end-1c"))
+        except Exception:
+            # Intentionally swallow exceptions to avoid interrupting typing
+            pass
+        finally:
+            self._autosave_after_id = None
+            # schedule again for continuous autosave while enabled
+            self._start_autosave_if_enabled()
+
+    def _maybe_restore_from_autosave(self) -> None:
+        path = self._autosave_path()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            if content:
+                self.text_area.delete("1.0", tk.END)
+                self.text_area.insert("1.0", content)
+                self.is_modified = True
+                self._update_window_title()
+                self._update_status_bar()
+        except Exception:
+            pass
+
+    def _clear_autosave_artifacts(self) -> None:
+        path = self._autosave_path()
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    def toggle_autosave(self) -> None:
+        # Cancel any pending autosave and restart if enabled
+        if self._autosave_after_id is not None:
+            try:
+                self.root.after_cancel(self._autosave_after_id)
+            except Exception:
+                pass
+            self._autosave_after_id = None
+        if self.autosave_enabled_var.get():
+            self._start_autosave_if_enabled()
 
 
 def main() -> None:
