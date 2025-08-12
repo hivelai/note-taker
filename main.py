@@ -1,6 +1,8 @@
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkinter import ttk
+import tkinter.font as tkfont
 from typing import Optional
 
 
@@ -15,29 +17,60 @@ class NoteApp:
         self.current_file_path: Optional[str] = None
         self.is_modified: bool = False
 
+        # UI state
+        self.theme_mode: str = "light"
+        self.wrap_enabled_var = tk.BooleanVar(value=True)
+        self.show_line_numbers_var = tk.BooleanVar(value=True)
+
+        self._init_style()
+        self._configure_fonts()
         self._create_widgets()
+        self._apply_theme()
         self._create_menu()
         self._create_bindings()
         self._update_status_bar()
 
     def _create_widgets(self) -> None:
-        self.main_frame = tk.Frame(self.root)
+        # Toolbar
+        self.toolbar = ttk.Frame(self.root, padding=(8, 6))
+        self.toolbar.pack(side=tk.TOP, fill=tk.X)
+
+        # Some Tk builds/fonts don't render emoji well; use plain text labels for portability
+        self.btn_new = ttk.Button(self.toolbar, text="New", width=8, command=self.new_file)
+        self.btn_open = ttk.Button(self.toolbar, text="Open", width=8, command=self.open_file)
+        self.btn_save = ttk.Button(self.toolbar, text="Save", width=8, command=self.save_file)
+        self.btn_find = ttk.Button(self.toolbar, text="Find", width=8, command=self.open_find_dialog)
+        self.btn_theme = ttk.Button(self.toolbar, text="Dark", width=10, command=self.toggle_theme)
+        for w in (self.btn_new, self.btn_open, self.btn_save, self.btn_find, self.btn_theme):
+            w.pack(side=tk.LEFT, padx=(0, 6))
+
+        # Main content area
+        self.main_frame = ttk.Frame(self.root, padding=(8, 0, 8, 0))
         self.main_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.scrollbar_y = tk.Scrollbar(self.main_frame, orient=tk.VERTICAL)
+        self.content_frame = ttk.Frame(self.main_frame)
+        self.content_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Line numbers gutter
+        self.line_numbers_canvas = tk.Canvas(self.content_frame, width=48, highlightthickness=0)
+        self.line_numbers_canvas.pack(side=tk.LEFT, fill=tk.Y)
+
+        # Text area + scrollbar
+        self.scrollbar_y = ttk.Scrollbar(self.content_frame, orient=tk.VERTICAL)
         self.text_area = tk.Text(
-            self.main_frame,
+            self.content_frame,
             wrap=tk.WORD,
             undo=True,
             autoseparators=True,
             maxundo=-1,
-            yscrollcommand=self.scrollbar_y.set,
+            yscrollcommand=self._on_yscroll,
         )
         self.scrollbar_y.config(command=self.text_area.yview)
 
-        self.scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
         self.text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Status bar
         self.status_var = tk.StringVar(value="Ready")
         self.status_bar = tk.Label(
             self.root,
@@ -45,11 +78,13 @@ class NoteApp:
             anchor=tk.W,
             relief=tk.SUNKEN,
             bd=1,
-            padx=8,
+            padx=10,
         )
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
+        # Text tags
         self.text_area.tag_configure("find_match", background="#ffea94")
+        self.text_area.tag_configure("current_line", background="")
 
     def _create_menu(self) -> None:
         self.menubar = tk.Menu(self.root)
@@ -79,6 +114,25 @@ class NoteApp:
         search_menu.add_command(label="Find…", accelerator="Ctrl+F", command=self.open_find_dialog)
         self.menubar.add_cascade(label="Search", menu=search_menu)
 
+        view_menu = tk.Menu(self.menubar, tearoff=False)
+        view_menu.add_checkbutton(
+            label="Word Wrap",
+            onvalue=True,
+            offvalue=False,
+            variable=self.wrap_enabled_var,
+            command=self.toggle_wrap,
+        )
+        view_menu.add_checkbutton(
+            label="Show Line Numbers",
+            onvalue=True,
+            offvalue=False,
+            variable=self.show_line_numbers_var,
+            command=self.toggle_line_numbers,
+        )
+        view_menu.add_separator()
+        view_menu.add_command(label="Toggle Theme", accelerator="Ctrl+T", command=self.toggle_theme)
+        self.menubar.add_cascade(label="View", menu=view_menu)
+
         help_menu = tk.Menu(self.menubar, tearoff=False)
         help_menu.add_command(label="About", command=self.show_about_dialog)
         self.menubar.add_cascade(label="Help", menu=help_menu)
@@ -92,10 +146,21 @@ class NoteApp:
         self.root.bind("<Control-S>", lambda e: self._wrap_event(self.save_file_as))
         self.root.bind("<Control-q>", lambda e: self._wrap_event(self.on_exit))
         self.root.bind("<Control-f>", lambda e: self._wrap_event(self.open_find_dialog))
+        self.root.bind("<Control-t>", lambda e: self._wrap_event(self.toggle_theme))
+
+        # Zoom text
+        self.root.bind("<Control-minus>", lambda e: self._wrap_event(lambda: self._adjust_font_size(-1)))
+        self.root.bind("<Control-equal>", lambda e: self._wrap_event(lambda: self._adjust_font_size(+1)))
+        self.root.bind("<Control-underscore>", lambda e: self._wrap_event(lambda: self._adjust_font_size(-1)))
+        self.root.bind("<Control-plus>", lambda e: self._wrap_event(lambda: self._adjust_font_size(+1)))
 
         self.text_area.bind("<<Modified>>", self._on_text_modified)
-        self.text_area.bind("<KeyRelease>", self._update_status_bar)
-        self.text_area.bind("<ButtonRelease-1>", self._update_status_bar)
+        self.text_area.bind("<KeyRelease>", self._on_cursor_or_view_changed)
+        self.text_area.bind("<ButtonRelease-1>", self._on_cursor_or_view_changed)
+        self.text_area.bind("<MouseWheel>", self._on_cursor_or_view_changed)
+        self.text_area.bind("<Button-4>", self._on_cursor_or_view_changed)
+        self.text_area.bind("<Button-5>", self._on_cursor_or_view_changed)
+        self.text_area.bind("<Configure>", self._on_cursor_or_view_changed)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_exit)
 
@@ -112,6 +177,8 @@ class NoteApp:
             self.is_modified = True
             self._update_window_title()
             self._update_status_bar()
+            self._highlight_current_line()
+            self._update_line_numbers()
             self.text_area.edit_modified(False)
 
     def _update_window_title(self) -> None:
@@ -123,7 +190,17 @@ class NoteApp:
         index = self.text_area.index("insert")
         line_str, col_str = index.split(".")
         modified_label = "Modified" if self.is_modified else "Saved"
-        self.status_var.set(f"{modified_label}  |  Line {int(line_str)}, Col {int(col_str) + 1}")
+        content = self.text_area.get("1.0", "end-1c")
+        char_count = len(content)
+        word_count = len(content.split()) if content else 0
+        try:
+            sel_length = len(self.text_area.get("sel.first", "sel.last"))
+        except tk.TclError:
+            sel_length = 0
+        sel_part = f" | Sel {sel_length}" if sel_length else ""
+        self.status_var.set(
+            f"{modified_label} | Ln {int(line_str)}, Col {int(col_str) + 1} | {char_count} chars, {word_count} words{sel_part}"
+        )
 
     def maybe_save_changes(self) -> bool:
         if not self.is_modified:
@@ -144,6 +221,9 @@ class NoteApp:
         self.text_area.edit_reset()
         self._update_window_title()
         self._update_status_bar()
+        self._clear_find_highlights()
+        self._highlight_current_line()
+        self._update_line_numbers()
 
     def open_file(self) -> None:
         if not self.maybe_save_changes():
@@ -172,6 +252,8 @@ class NoteApp:
         self._clear_find_highlights()
         self._update_window_title()
         self._update_status_bar()
+        self._highlight_current_line()
+        self._update_line_numbers()
 
     def save_file(self) -> bool:
         if self.current_file_path is None:
@@ -292,6 +374,137 @@ class NoteApp:
             " - Ctrl+Q: Exit"
         )
         messagebox.showinfo("About", info, parent=self.root)
+
+    # ---- Theming & UI helpers ----
+    def _init_style(self) -> None:
+        self.style = ttk.Style(self.root)
+        try:
+            self.style.theme_use("clam")
+        except Exception:
+            pass
+
+    def _configure_fonts(self) -> None:
+        self.ui_font = tkfont.nametofont("TkDefaultFont")
+        self.ui_font.configure(size=11)
+        self.text_font = tkfont.nametofont("TkTextFont")
+        self.text_font.configure(size=12)
+
+    def _apply_theme(self) -> None:
+        if self.theme_mode == "dark":
+            bg = "#111827"
+            fg = "#e5e7eb"
+            panel_bg = "#0b1220"
+            gutter_bg = "#0f172a"
+            gutter_fg = "#94a3b8"
+            insert = "#60a5fa"
+            select_bg = "#374151"
+            status_bg = "#1f2937"
+            status_fg = "#e5e7eb"
+            current_line_bg = "#111c2e"
+        else:
+            bg = "#ffffff"
+            fg = "#1f2937"
+            panel_bg = "#f8fafc"
+            gutter_bg = "#eef2f7"
+            gutter_fg = "#64748b"
+            insert = "#2563eb"
+            select_bg = "#c7d2fe"
+            status_bg = "#f3f4f6"
+            status_fg = "#111827"
+            current_line_bg = "#f7fbff"
+
+        # ttk styles
+        for style_name in ("TFrame", "TLabel", "TButton"):
+            self.style.configure(style_name, background=panel_bg, foreground=fg)
+        self.style.configure("Vertical.TScrollbar", troughcolor=panel_bg)
+
+        # Containers
+        self.root.configure(background=panel_bg)
+        self.toolbar.configure(style="TFrame")
+        self.main_frame.configure(style="TFrame")
+        self.content_frame.configure(style="TFrame")
+
+        # Text widget
+        self.text_area.configure(
+            bg=bg,
+            fg=fg,
+            insertbackground=insert,
+            selectbackground=select_bg,
+            highlightthickness=1,
+            highlightbackground=gutter_bg,
+            font=self.text_font,
+            wrap=tk.WORD if self.wrap_enabled_var.get() else tk.NONE,
+        )
+        # Gutter
+        self.line_numbers_canvas.configure(background=gutter_bg)
+        self.gutter_fg = gutter_fg
+
+        # Status bar
+        self.status_bar.configure(background=status_bg, foreground=status_fg)
+
+        # Current line highlight
+        self.text_area.tag_configure("current_line", background=current_line_bg)
+        self._highlight_current_line()
+        self._update_line_numbers()
+
+        # Toolbar theme button label (plain text for portability)
+        self.btn_theme.configure(text=("Light" if self.theme_mode == "dark" else "Dark"))
+
+    def toggle_theme(self) -> None:
+        self.theme_mode = "dark" if self.theme_mode == "light" else "light"
+        self._apply_theme()
+
+    def toggle_wrap(self) -> None:
+        self.text_area.configure(wrap=tk.WORD if self.wrap_enabled_var.get() else tk.NONE)
+        self._apply_theme()
+
+    def toggle_line_numbers(self) -> None:
+        if self.show_line_numbers_var.get():
+            self.line_numbers_canvas.pack(side=tk.LEFT, fill=tk.Y)
+            self._update_line_numbers()
+        else:
+            self.line_numbers_canvas.pack_forget()
+
+    def _on_yscroll(self, first: str, last: str) -> None:
+        self.scrollbar_y.set(first, last)
+        self._update_line_numbers()
+
+    def _on_cursor_or_view_changed(self, event=None) -> None:
+        self._highlight_current_line()
+        self._update_line_numbers()
+        self._update_status_bar()
+
+    def _highlight_current_line(self) -> None:
+        self.text_area.tag_remove("current_line", 1.0, tk.END)
+        index = self.text_area.index("insert linestart")
+        self.text_area.tag_add("current_line", index, f"{index} lineend+1c")
+
+    def _update_line_numbers(self) -> None:
+        if not self.show_line_numbers_var.get():
+            return
+        self.line_numbers_canvas.delete("all")
+        try:
+            i = self.text_area.index("@0,0")
+        except tk.TclError:
+            return
+        while True:
+            dline = self.text_area.dlineinfo(i)
+            if dline is None:
+                break
+            y = dline[1]
+            line = i.split(".")[0]
+            self.line_numbers_canvas.create_text(
+                44, y + 2, anchor="ne", text=line, fill=self.gutter_fg, font=self.ui_font
+            )
+            try:
+                i = self.text_area.index(f"{i}+1line")
+            except tk.TclError:
+                break
+
+    def _adjust_font_size(self, delta: int) -> None:
+        size = max(8, min(28, self.text_font.cget("size") + delta))
+        self.text_font.configure(size=size)
+        self._apply_theme()
 
 
 def main() -> None:
