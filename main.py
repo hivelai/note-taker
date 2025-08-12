@@ -278,6 +278,21 @@ class NoteApp:
             self.text_area.tag_add("find_match", match_index, end_index)
             start = end_index
 
+    def show_about_dialog(self) -> None:
+        app_name = "Note"
+        info = (
+            f"{app_name}\n"
+            "A simple Tkinter note taking app.\n\n"
+            "Shortcuts:\n"
+            " - Ctrl+N: New\n"
+            " - Ctrl+O: Open\n"
+            " - Ctrl+S: Save\n"
+            " - Ctrl+Shift+S: Save As\n"
+            " - Ctrl+F: Find\n"
+            " - Ctrl+Q: Exit"
+        )
+        messagebox.showinfo("About", info, parent=self.root)
+
 
 def main() -> None:
     root = tk.Tk()
