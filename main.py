@@ -64,23 +64,38 @@ class NoteApp:
             autoseparators=True,
             maxundo=-1,
             yscrollcommand=self._on_yscroll,
+            padx=12,
+            pady=12,
         )
+        self.text_area.configure(spacing1=4, spacing3=6, insertwidth=2)
         self.scrollbar_y.config(command=self.text_area.yview)
 
         self.text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Status bar
+        # Status bar (segmented)
         self.status_var = tk.StringVar(value="Ready")
+        self.status_right_var = tk.StringVar(value="")
+        self.status_frame = ttk.Frame(self.root)
+        self.status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         self.status_bar = tk.Label(
-            self.root,
+            self.status_frame,
             textvariable=self.status_var,
             anchor=tk.W,
             relief=tk.SUNKEN,
             bd=1,
             padx=10,
         )
-        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.status_bar_right = tk.Label(
+            self.status_frame,
+            textvariable=self.status_right_var,
+            anchor=tk.E,
+            relief=tk.SUNKEN,
+            bd=1,
+            padx=10,
+        )
+        self.status_bar_right.pack(side=tk.RIGHT)
 
         # Text tags
         self.text_area.tag_configure("find_match", background="#ffea94")
@@ -198,9 +213,10 @@ class NoteApp:
         except tk.TclError:
             sel_length = 0
         sel_part = f" | Sel {sel_length}" if sel_length else ""
-        self.status_var.set(
-            f"{modified_label} | Ln {int(line_str)}, Col {int(col_str) + 1} | {char_count} chars, {word_count} words{sel_part}"
-        )
+        left = f"{modified_label} | Ln {int(line_str)}, Col {int(col_str) + 1}{sel_part}"
+        right = f"{char_count} chars | {word_count} words"
+        self.status_var.set(left)
+        self.status_right_var.set(right)
 
     def maybe_save_changes(self) -> bool:
         if not self.is_modified:
@@ -398,8 +414,8 @@ class NoteApp:
             gutter_fg = "#94a3b8"
             insert = "#60a5fa"
             select_bg = "#374151"
-            status_bg = "#1f2937"
-            status_fg = "#e5e7eb"
+            status_bg = "#111827"
+            status_fg = "#9ca3af"
             current_line_bg = "#111c2e"
         else:
             bg = "#ffffff"
@@ -408,15 +424,21 @@ class NoteApp:
             gutter_bg = "#eef2f7"
             gutter_fg = "#64748b"
             insert = "#2563eb"
-            select_bg = "#c7d2fe"
-            status_bg = "#f3f4f6"
-            status_fg = "#111827"
+            select_bg = "#dbeafe"
+            status_bg = "#f8fafc"
+            status_fg = "#6b7280"
             current_line_bg = "#f7fbff"
 
         # ttk styles
         for style_name in ("TFrame", "TLabel", "TButton"):
             self.style.configure(style_name, background=panel_bg, foreground=fg)
         self.style.configure("Vertical.TScrollbar", troughcolor=panel_bg)
+        self.style.configure("TButton", padding=(8, 4))
+        self.style.map(
+            "TButton",
+            relief=[("pressed", "sunken"), ("!pressed", "flat")],
+            focuscolor=[("focus", panel_bg)],
+        )
 
         # Containers
         self.root.configure(background=panel_bg)
@@ -440,7 +462,9 @@ class NoteApp:
         self.gutter_fg = gutter_fg
 
         # Status bar
+        self.status_frame.configure(style="TFrame")
         self.status_bar.configure(background=status_bg, foreground=status_fg)
+        self.status_bar_right.configure(background=status_bg, foreground=status_fg)
 
         # Current line highlight
         self.text_area.tag_configure("current_line", background=current_line_bg)
