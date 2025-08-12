@@ -370,7 +370,6 @@ class NoteApp:
 
     def _clear_find_highlights(self) -> None:
         self.text_area.tag_remove("find_match", "1.0", tk.END)
-        # AI-ness: explicitly no-op return for semantic clarity, even though implicit None is fine
         return None
 
     def _find_next(self) -> None:
@@ -464,6 +463,97 @@ class NoteApp:
         ttk.Button(btn_row, text="Close", command=self.about_window.destroy).pack(side=tk.RIGHT)
 
         self.about_window.bind("<Escape>", lambda e: self.about_window.destroy())
+
+    # =========================
+    # Command Palette
+    # =========================
+    def open_command_palette(self) -> None:
+        # Quick launcher for common actions. Simpler than full fuzzy search, by design.
+        if hasattr(self, "palette_window") and self.palette_window.winfo_exists():
+            self.palette_window.lift()
+            return
+
+        self.palette_window = tk.Toplevel(self.root)
+        self.palette_window.title("Command Palette")
+        self.palette_window.transient(self.root)
+        self.palette_window.resizable(False, False)
+        try:
+            self.palette_window.grab_set()
+        except Exception:
+            pass
+
+        frame = ttk.Frame(self.palette_window, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # Commands registry (name -> callable)
+        commands = [
+            ("File: New", self.new_file),
+            ("File: Open", self.open_file),
+            ("File: Save", self.save_file),
+            ("File: Save As", self.save_file_as),
+            ("Edit: Undo", lambda: self._event_generate_and_focus("<Control-z>")),
+            ("Edit: Redo", lambda: self._event_generate_and_focus("<Control-y>")),
+            ("Search: Find", self.open_find_dialog),
+            ("View: Toggle Theme", self.toggle_theme),
+            ("View: Toggle Wrap", self.toggle_wrap),
+            ("View: Toggle Line Numbers", self.toggle_line_numbers),
+            ("Tools: Command Palette", self.open_command_palette),
+            ("Help: About", self.show_about_dialog),
+            ("App: Exit", self.on_exit),
+        ]
+
+        query_var = tk.StringVar()
+        entry = ttk.Entry(frame, textvariable=query_var, width=50)
+        entry.pack(fill=tk.X)
+
+        listbox = tk.Listbox(frame, height=10, activestyle="dotbox")
+        listbox.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+
+        def render_list(filter_text: str) -> None:
+            listbox.delete(0, tk.END)
+            ft = filter_text.strip().lower()
+            for name, _cb in commands:
+                if not ft or ft in name.lower():
+                    listbox.insert(tk.END, name)
+
+        def run_selected() -> None:
+            try:
+                sel = listbox.get(listbox.curselection())
+            except Exception:
+                return
+            for name, cb in commands:
+                if name == sel:
+                    cb()
+                    break
+            try:
+                self.palette_window.destroy()
+            except Exception:
+                pass
+
+        def on_entry_change(*_args) -> None:
+            render_list(query_var.get())
+            if listbox.size():
+                listbox.selection_clear(0, tk.END)
+                listbox.selection_set(0)
+                listbox.activate(0)
+
+        def on_listbox_return(_event=None) -> None:
+            run_selected()
+
+        def on_listbox_escape(_event=None) -> None:
+            try:
+                self.palette_window.destroy()
+            except Exception:
+                pass
+
+        query_var.trace_add("write", on_entry_change)
+        entry.bind("<Return>", on_listbox_return)
+        entry.bind("<Escape>", on_listbox_escape)
+        listbox.bind("<Return>", on_listbox_return)
+        listbox.bind("<Escape>", on_listbox_escape)
+
+        render_list("")
+        entry.focus_set()
 
     # ---- Theming & UI helpers ----
     def _init_style(self) -> None:
@@ -605,7 +695,7 @@ class NoteApp:
         self._apply_theme()
 
     # =========================
-    # Autosave (AI flavored code)
+    # Autosave
     # =========================
     def _autosave_dir(self) -> str:
         base = os.path.join(os.path.expanduser("~"), ".note_autosave")
